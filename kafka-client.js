@@ -1,6 +1,8 @@
+import './load-env.js';
+
 import { Kafka } from 'kafkajs';
 
 export const kafkaClient = new Kafka({
   clientId: 'ap',
-  brokers: ['localhost:9092'],
+  brokers: [process.env.KAFKA_BROKER ?? 'localhost:9092'],
 });

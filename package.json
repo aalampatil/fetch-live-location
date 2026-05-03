@@ -5,6 +5,9 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
+    "start": "node index.js",
+    "oidc:register": "node register-oidc-client.js",
+    "oidc:register:env": "node register-oidc-client.js --write-env",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

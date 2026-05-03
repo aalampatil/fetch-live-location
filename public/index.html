@@ -11,12 +11,45 @@
       crossorigin=""
     />
     <style>
+      body {
+        margin: 0;
+        font-family:
+          Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+          sans-serif;
+      }
+
+      header {
+        align-items: center;
+        border-bottom: 1px solid #d4d4d4;
+        display: flex;
+        height: 10vh;
+        justify-content: space-between;
+        padding: 0 16px;
+      }
+
       #map {
         height: 90vh;
+      }
+
+      button {
+        background: #111827;
+        border: 0;
+        color: white;
+        cursor: pointer;
+        padding: 8px 12px;
       }
     </style>
   </head>
   <body>
+    <header>
+      <div>
+        <strong>Location Sharing</strong>
+        <span id="current-user"></span>
+      </div>
+      <form method="post" action="/auth/logout">
+        <button type="submit">Logout</button>
+      </form>
+    </header>
     <div id="map"></div>
     <script
       src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -31,16 +64,29 @@
 
       const remoteMarkers = new Map();
 
+      fetch('/api/me')
+        .then((response) => response.json())
+        .then(({ user }) => {
+          document.getElementById('current-user').textContent =
+            ` - ${user.name ?? user.email ?? user.sub}`;
+        });
+
+      socket.on('connect_error', () => {
+        window.location.href = '/auth/login';
+      });
+
       socket.on('server:location:update', (data) => {
-        const { id, latitude, longitude } = data;
+        const { id, name, email, latitude, longitude } = data;
+        const label = name ?? email ?? id;
         if (!remoteMarkers.has(id)) {
           const marker = L.marker([latitude, longitude])
             .addTo(map)
-            .bindPopup(id);
+            .bindPopup(label);
           remoteMarkers.set(id, marker);
         } else {
           const existingMarker = remoteMarkers.get(id);
-          existingMarker.setLatLng([latitude, longitude]); // This line is not updating UI
+          existingMarker.setLatLng([latitude, longitude]);
+          existingMarker.setPopupContent(label);
         }
       });
 
@@ -74,17 +120,26 @@
 
       let myCurrentLocationMarker = null;
 
+      function updateMyLocationMarker(latitude, longitude) {
+        if (!myCurrentLocationMarker) {
+          myCurrentLocationMarker = L.marker([latitude, longitude])
+            .addTo(map)
+            .bindPopup('You are here');
+        } else {
+          myCurrentLocationMarker.setLatLng([latitude, longitude]);
+        }
+      }
+
       async function main() {
+        const { latitude, longitude } = await getUsersCurrentLocation();
+        socket.emit('client:location:update', { latitude, longitude });
+        map.setView([latitude, longitude], 15);
+        updateMyLocationMarker(latitude, longitude);
+
         setInterval(async () => {
           const { latitude, longitude } = await getUsersCurrentLocation();
           socket.emit('client:location:update', { latitude, longitude });
-          if (!myCurrentLocationMarker) {
-            myCurrentLocationMarker = L.marker([latitude, longitude])
-              .addTo(map)
-              .bindPopup('You are here');
-          } else {
-            myCurrentLocationMarker.setLatLng([latitude, longitude]);
-          }
+          updateMyLocationMarker(latitude, longitude);
         }, 10 * 1000);
       }
 
