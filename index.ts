@@ -364,7 +364,11 @@ async function main(): Promise<void> {
     return res.json({ user: req.session.user });
   });
 
-  app.use(requireAuth, express.static(path.resolve('./public')));
+  app.use(
+    requireAuth,
+    express.static(path.resolve('./dist/client')),
+    express.static(path.resolve('./public')),
+  );
 
   server.listen(PORT, () =>
     console.log(`Server running on http://localhost:${PORT}`),

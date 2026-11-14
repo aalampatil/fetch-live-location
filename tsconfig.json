@@ -7,7 +7,6 @@
     "types": ["node"],
     "rootDir": ".",
     "outDir": "dist",
-    "allowJs": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "verbatimModuleSyntax": true,
@@ -17,5 +16,5 @@
     "sourceMap": true,
     "skipLibCheck": true
   },
-  "include": ["*.js", "*.ts", "public/**/*.ts"]
+  "include": ["*.ts", "client/**/*.ts"]
 }
