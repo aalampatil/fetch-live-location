@@ -2,12 +2,16 @@
   "name": "kafka-learning",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "start": "node index.js",
-    "oidc:register": "node register-oidc-client.js",
-    "oidc:register:env": "node register-oidc-client.js --write-env",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "pnpm build && node dist/index.js",
+    "kafka:setup": "pnpm build && node dist/kafka-admin.js",
+    "kafka:process": "pnpm build && node dist/database-processor.js",
+    "oidc:register": "pnpm build && node dist/register-oidc-client.js",
+    "oidc:register:env": "pnpm build && node dist/register-oidc-client.js --write-env",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -21,6 +25,9 @@
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
-    "@types/node": "^25.6.0"
+    "@types/leaflet": "^1.9.22",
+    "@types/node": "^25.6.0",
+    "socket.io-client": "4.8.3",
+    "typescript": "^7.0.2"
   }
 }
