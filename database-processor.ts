@@ -1,6 +1,7 @@
 import { kafkaClient } from './kafka-client.js';
+import type { LocationUpdate } from './types.js';
 
-async function init() {
+async function init(): Promise<void> {
   const kafkaConsumer = kafkaClient.consumer({
     groupId: `database-processor`,
   });
@@ -11,9 +12,10 @@ async function init() {
     fromBeginning: true,
   });
 
-  kafkaConsumer.run({
-    eachMessage: async ({ topic, partition, message, heartbeat }) => {
-      const data = JSON.parse(message.value.toString());
+  await kafkaConsumer.run({
+    eachMessage: async ({ message, heartbeat }) => {
+      if (!message.value) return;
+      const data: LocationUpdate = JSON.parse(message.value.toString());
       console.log(`INSERT INTO DB LOCATION`, data);
       await heartbeat();
     },

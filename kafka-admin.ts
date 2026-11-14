@@ -1,6 +1,6 @@
 import { kafkaClient } from './kafka-client.js';
 
-async function setup() {
+async function setup(): Promise<void> {
   const admin = kafkaClient.admin();
 
   console.log(`Kafka Admin Connecting...`);
