@@ -1,5 +1,10 @@
 import fs from 'node:fs';
 
+interface RegisteredClient {
+  clientId: string;
+  clientSecret: string;
+}
+
 const providerBase =
   process.env.OIDC_PROVIDER_BASE?.replace(/\/$/, '') ??
   'https://oidc-server.aalampatil.online';
@@ -23,7 +28,7 @@ if (!response.ok) {
   );
 }
 
-const client = await response.json();
+const client: RegisteredClient = await response.json();
 const env = [
   `PORT=${process.env.PORT ?? 8000}`,
   `KAFKA_BROKER=${process.env.KAFKA_BROKER ?? 'localhost:9092'}`,

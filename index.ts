@@ -5,9 +5,35 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 
 import express from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { Server } from 'socket.io';
+import type { Socket } from 'socket.io';
 
 import { kafkaClient } from './kafka-client.js';
+import type {
+  ClientToServerEvents,
+  LocationUpdate,
+  OidcTokenResponse,
+  OidcUser,
+  ServerToClientEvents,
+  Session,
+  SocketData,
+} from './types.js';
+
+declare global {
+  namespace Express {
+    interface Request {
+      session: Session;
+    }
+  }
+}
+
+type LocationSocket = Socket<
+  ClientToServerEvents,
+  ServerToClientEvents,
+  Record<string, never>,
+  SocketData
+>;
 
 const OIDC_ISSUER =
   process.env.OIDC_ISSUER?.replace(/\/$/, '') ??
@@ -23,45 +49,47 @@ const OIDC_CLIENT_ID = process.env.OIDC_CLIENT_ID;
 const OIDC_CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET;
 const OIDC_SCOPE = process.env.OIDC_SCOPE ?? 'openid email profile';
 const SESSION_COOKIE = 'kafka_location_sid';
-const sessions = new Map();
+const sessions = new Map<string, Session>();
 
 function randomToken(bytes = 32) {
   return crypto.randomBytes(bytes).toString('base64url');
 }
 
-function codeChallenge(verifier) {
+function codeChallenge(verifier: string): string {
   return crypto.createHash('sha256').update(verifier).digest('base64url');
 }
 
-function parseCookies(cookieHeader = '') {
+function parseCookies(cookieHeader = ''): Record<string, string> {
   return Object.fromEntries(
     cookieHeader
       .split(';')
-      .map((cookie) => cookie.trim().split('='))
-      .filter(([key, value]) => key && value)
-      .map(([key, value]) => [key, decodeURIComponent(value)]),
+      .flatMap((cookie) => {
+        const [key, value] = cookie.trim().split('=');
+        return key && value ? [[key, decodeURIComponent(value)]] : [];
+      }),
   );
 }
 
-function getOrigin(req) {
+function getOrigin(req: Request): string {
   const protocol = req.headers['x-forwarded-proto'] ?? req.protocol;
   return `${protocol}://${req.get('host')}`;
 }
 
-function getRedirectUri(req) {
+function getRedirectUri(req: Request): string {
   return process.env.OIDC_REDIRECT_URI ?? `${getOrigin(req)}/auth/callback`;
 }
 
-function createSession() {
+function createSession(): Session {
   const id = randomToken();
-  const session = { id, createdAt: Date.now() };
+  const session: Session = { id, createdAt: Date.now() };
   sessions.set(id, session);
   return session;
 }
 
-function sessionMiddleware(req, res, next) {
+function sessionMiddleware(req: Request, res: Response, next: NextFunction): void {
   const cookies = parseCookies(req.headers.cookie);
-  let session = cookies[SESSION_COOKIE] && sessions.get(cookies[SESSION_COOKIE]);
+  const sessionId = cookies[SESSION_COOKIE];
+  let session = sessionId ? sessions.get(sessionId) : undefined;
 
   if (!session) {
     session = createSession();
@@ -78,12 +106,12 @@ function sessionMiddleware(req, res, next) {
   next();
 }
 
-function requireAuth(req, res, next) {
+function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (req.session.user) return next();
   return res.redirect(`/auth/login?returnTo=${encodeURIComponent(req.originalUrl)}`);
 }
 
-function requireOidcConfig(req, res, next) {
+function requireOidcConfig(req: Request, res: Response, next: NextFunction) {
   if (OIDC_CLIENT_ID && OIDC_CLIENT_SECRET) return next();
 
   return res.status(500).send(`
@@ -92,11 +120,19 @@ function requireOidcConfig(req, res, next) {
     <pre>OIDC_CLIENT_ID=...
 OIDC_CLIENT_SECRET=...
 OIDC_REDIRECT_URI=${getRedirectUri(req)}</pre>
-    <p>Run: <code>node register-oidc-client.js</code></p>
+    <p>Run: <code>pnpm oidc:register:env</code></p>
   `);
 }
 
-async function exchangeCodeForTokens({ code, redirectUri, codeVerifier }) {
+async function exchangeCodeForTokens({
+  code,
+  redirectUri,
+  codeVerifier,
+}: {
+  code: string;
+  redirectUri: string;
+  codeVerifier: string;
+}): Promise<OidcTokenResponse> {
   const response = await fetch(OIDC_TOKEN_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -117,7 +153,13 @@ async function exchangeCodeForTokens({ code, redirectUri, codeVerifier }) {
   return response.json();
 }
 
-async function fetchUserInfo({ accessToken, tokenType }) {
+async function fetchUserInfo({
+  accessToken,
+  tokenType,
+}: {
+  accessToken: string;
+  tokenType?: string;
+}): Promise<OidcUser> {
   const response = await fetch(OIDC_USERINFO_ENDPOINT, {
     headers: {
       Authorization: `${tokenType ?? 'Bearer'} ${accessToken}`,
@@ -131,12 +173,13 @@ async function fetchUserInfo({ accessToken, tokenType }) {
   return response.json();
 }
 
-function getSessionFromSocket(socket) {
+function getSessionFromSocket(socket: LocationSocket): Session | undefined {
   const cookies = parseCookies(socket.handshake.headers.cookie);
-  return cookies[SESSION_COOKIE] && sessions.get(cookies[SESSION_COOKIE]);
+  const sessionId = cookies[SESSION_COOKIE];
+  return sessionId ? sessions.get(sessionId) : undefined;
 }
 
-async function main() {
+async function main(): Promise<void> {
   const PORT = process.env.PORT ?? 8000;
 
   const app = express();
@@ -144,7 +187,12 @@ async function main() {
   app.use(sessionMiddleware);
 
   const server = http.createServer(app);
-  const io = new Server();
+  const io = new Server<
+    ClientToServerEvents,
+    ServerToClientEvents,
+    Record<string, never>,
+    SocketData
+  >();
 
   const kafkaProducer = kafkaClient.producer();
   await kafkaProducer.connect();
@@ -159,9 +207,10 @@ async function main() {
     fromBeginning: true,
   });
 
-  kafkaConsumer.run({
-    eachMessage: async ({ topic, partition, message, heartbeat }) => {
-      const data = JSON.parse(message.value.toString());
+  await kafkaConsumer.run({
+    eachMessage: async ({ message, heartbeat }) => {
+      if (!message.value) return;
+      const data: LocationUpdate = JSON.parse(message.value.toString());
       console.log(`KafkaConsumer Data Received`, { data });
       io.emit('server:location:update', {
         id: data.id,
@@ -182,12 +231,16 @@ async function main() {
       return next(new Error('unauthorized'));
     }
 
-    socket.session = session;
+    socket.data.session = session;
     return next();
   });
 
   io.on('connection', (socket) => {
-    const user = socket.session.user;
+    const user = socket.data.session.user;
+    if (!user) {
+      socket.disconnect(true);
+      return;
+    }
     console.log(`[Socket:${socket.id}]: Connected Success...`, {
       user: user.email ?? user.sub,
     });
@@ -227,7 +280,10 @@ async function main() {
     const nonce = randomToken();
     const codeVerifier = randomToken(64);
 
-    req.session.returnTo = req.query.returnTo || '/';
+    req.session.returnTo =
+      typeof req.query.returnTo === 'string' && req.query.returnTo
+        ? req.query.returnTo
+        : '/';
     req.session.oidc = {
       state,
       nonce,
@@ -236,7 +292,7 @@ async function main() {
     };
 
     const authorizeUrl = new URL(OIDC_AUTHORIZATION_ENDPOINT);
-    authorizeUrl.searchParams.set('client_id', OIDC_CLIENT_ID);
+    authorizeUrl.searchParams.set('client_id', OIDC_CLIENT_ID ?? '');
     authorizeUrl.searchParams.set('redirect_uri', redirectUri);
     authorizeUrl.searchParams.set('response_type', 'code');
     authorizeUrl.searchParams.set('scope', OIDC_SCOPE);
@@ -252,18 +308,27 @@ async function main() {
   app.get('/auth/callback', requireOidcConfig, async (req, res, next) => {
     try {
       const { code, state, error, error_description } = req.query;
-      if (error) {
-        return res.status(401).send(error_description ?? error);
+      if (typeof error === 'string') {
+        return res.status(401).send(
+          typeof error_description === 'string' ? error_description : error,
+        );
       }
 
-      if (!code || !state || state !== req.session.oidc?.state) {
+      const oidc = req.session.oidc;
+      if (
+        typeof code !== 'string' ||
+        !code ||
+        typeof state !== 'string' ||
+        !oidc ||
+        state !== oidc.state
+      ) {
         return res.status(400).send('Invalid OIDC callback state.');
       }
 
       const tokens = await exchangeCodeForTokens({
         code,
-        redirectUri: req.session.oidc.redirectUri,
-        codeVerifier: req.session.oidc.codeVerifier,
+        redirectUri: oidc.redirectUri,
+        codeVerifier: oidc.codeVerifier,
       });
       const user = await fetchUserInfo({
         accessToken: tokens.access_token,
